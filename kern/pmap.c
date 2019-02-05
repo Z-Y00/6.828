@@ -273,11 +273,15 @@ mem_init_mp(void)
 	//     * [kstacktop_i - (KSTKSIZE + KSTKGAP), kstacktop_i - KSTKSIZE)
 	//          -- not backed; so if the kernel overflows its stack,
 	//             it will fault rather than overwrite another CPU's stack.
-	//             Known as a "guard page".
+	//             Known as a "guard page".!!
 	//     Permissions: kernel RW, user NONE
 	//
 	// LAB 4: Your code here:
-
+	for (ssize_t i = 0; i < NCPU; i++) {
+    	uintptr_t kstacktop_i = KSTACKTOP - i * (KSTKSIZE + KSTKGAP);
+    	boot_map_region(kern_pgdir, kstacktop_i - KSTKSIZE, KSTKSIZE,
+                    PADDR(percpu_kstacks[i]), PTE_W | PTE_P);
+	}
 }
 
 // --------------------------------------------------------------
@@ -316,8 +320,10 @@ page_init(void)
 	// Change the code to reflect this.
 	// NB: DO NOT actually touch the physical memory corresponding to
 	// free pages!
-	size_t i;
-	for (i = 1; i < npages_basemem; i++) {
+	for (size_t i = 1; i < npages_basemem; i++) {
+		if (i == PGNUM(MPENTRY_PADDR)) {
+            continue;
+        }
 		pages[i].pp_ref = 0;
 		pages[i].pp_link = page_free_list;
 		page_free_list = &pages[i];
@@ -606,7 +612,12 @@ mmio_map_region(physaddr_t pa, size_t size)
 	// Hint: The staff solution uses boot_map_region.
 	//
 	// Your code here:
-	panic("mmio_map_region not implemented");
+	size = ROUNDUP(size, PGSIZE);
+	boot_map_region(kern_pgdir, base, size, pa, PTE_W | PTE_PCD | PTE_PWT);
+	uintptr_t old_base = base;
+	base+=size;
+	//panic("mmio_map_region not implemented");
+	return (void*)old_base;
 }
 
 static uintptr_t user_mem_check_addr;
@@ -644,6 +655,10 @@ user_mem_check(struct Env *env, const void *va, size_t len, int perm)
     for (; start < end; start += PGSIZE) {
         pte_t *entry =
             pgdir_walk(env->env_pgdir, (char *)start, false);
+		if (!entry) {
+			user_mem_check_addr = (uintptr_t)va;
+            return -E_FAULT;		
+			}
         if ((*entry & (perm | PTE_P)) != (perm | PTE_P)) {
             if (start <= (uintptr_t)va) {
                 user_mem_check_addr = (uintptr_t)va;
